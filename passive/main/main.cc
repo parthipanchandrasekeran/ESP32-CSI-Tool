@@ -53,7 +53,9 @@ void config_print() {
     printf("-----------------------\n");
     printf("PROJECT_NAME: %s\n", "PASSIVE");
     printf("CONFIG_ESPTOOLPY_MONITOR_BAUD: %d\n", CONFIG_ESPTOOLPY_MONITOR_BAUD);
+#ifdef CONFIG_ESP_CONSOLE_UART_BAUDRATE
     printf("CONFIG_ESP_CONSOLE_UART_BAUDRATE: %d\n", CONFIG_ESP_CONSOLE_UART_BAUDRATE);
+#endif
     printf("IDF_VER: %s\n", IDF_VER);
     printf("-----------------------\n");
     printf("WIFI_CHANNEL: %d\n", WIFI_CHANNEL);

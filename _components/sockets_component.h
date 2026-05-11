@@ -19,7 +19,7 @@ void socket_transmitter_sta_loop(bool (*is_wifi_connected)()) {
     int socket_fd = -1;
     while (1) {
         close(socket_fd);
-        char *ip = (char *) "192.168.4.1";
+        char *ip = (char *) "10.0.0.1";  // gateway, generates return traffic for CSI
         struct sockaddr_in caddr;
         caddr.sin_family = AF_INET;
         caddr.sin_port = htons(2223);

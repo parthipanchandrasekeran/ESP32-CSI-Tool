@@ -149,6 +149,11 @@ void station_init() {
 
     esp_wifi_set_ps(WIFI_PS_NONE);
 
+    // NOTE: tried adding esp_wifi_set_promiscuous(true) here for phone
+    // localization — destabilized the boards (resource pressure when combined
+    // with the active TX loop). Reverted. To re-enable later, also disable
+    // the socket_transmitter task to free CPU/memory.
+
     ESP_LOGI(TAG, "connect to ap SSID:%s password:%s", ESP_WIFI_SSID, ESP_WIFI_PASS);
 }
 
@@ -193,6 +198,10 @@ extern "C" void app_main() {
     printf("CSI will not be collected. Check `idf.py menuconfig  # > ESP32 CSI Tool Config` to enable CSI");
 #endif
 
-    xTaskCreatePinnedToCore(&vTask_socket_transmitter_sta_loop, "socket_transmitter_sta_loop",
-                            10000, (void *) &is_wifi_connected, 100, &xHandle, 1);
+    // Disabled: the active TX socket loop is not needed once we have CSI from
+    // ambient traffic + BLE scanner. Keeping it enabled wastes CPU/memory and
+    // was contributing to instability when BT coexistence was added.
+    // xTaskCreatePinnedToCore(&vTask_socket_transmitter_sta_loop, "socket_transmitter_sta_loop",
+    //                         10000, (void *) &is_wifi_connected, 5, &xHandle, 1);
+    (void) xHandle; (void) is_wifi_connected;
 }
