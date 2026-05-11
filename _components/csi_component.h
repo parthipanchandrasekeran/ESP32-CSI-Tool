@@ -150,6 +150,10 @@ static void wifi_scan_task(void *arg) {
 
         // Defensive: cancel any prior scan that didn't finish (clears stuck state)
         esp_wifi_scan_stop();
+        // esp_wifi_scan_stop() can disable CSI as a side effect. Re-enable now
+        // so the radio is still capturing CSI when the scan begins (the scan
+        // itself only briefly diverts channels — CSI resumes after).
+        esp_wifi_set_csi(1);
 
         wifi_scan_config_t scan_cfg = {};
         scan_cfg.ssid = NULL;
@@ -160,6 +164,11 @@ static void wifi_scan_task(void *arg) {
         scan_cfg.scan_time.passive = 120;           // ms per channel
 
         esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);  // blocking
+        // Re-enable CSI capture immediately after the scan returns. Some
+        // ESP-IDF versions disable CSI internally during/after scan_start
+        // and don't restore it, which was causing motion detection to die
+        // a few minutes after each boot.
+        esp_wifi_set_csi(1);
         if (err == ESP_OK) {
             consecutive_errors = 0;
             uint16_t ap_count = 0;
@@ -219,6 +228,58 @@ static void wifi_scan_task(void *arg) {
 
 static void start_wifi_scanner() {
     xTaskCreate(wifi_scan_task, "wifi_scan", 4096, NULL, 1, NULL);
+}
+
+// ---- CSI-traffic generator -------------------------------------------------
+// CSI is captured for 802.11 frames RECEIVED by this STA. In a low-traffic
+// home (no big downloads, few connected devices), the STA barely gets any
+// inbound frames — so motion-detection events are sparse.
+//
+// Trick: send small UDP packets outward at a steady rate. The AP's 802.11
+// ACK for each outgoing unicast packet is an inbound frame addressed to us,
+// which generates a CSI event. So self-traffic → constant CSI input →
+// reliable motion detection. ~10 Hz is plenty.
+//
+// Target the gateway (which always exists and ACKs unicast). The packets'
+// destination port can be anything — even a closed one — because we don't
+// need the gateway to actually process the data, just to ACK at L2.
+static void csi_traffic_task(void *arg) {
+    // Wait until our UDP send socket is initialized (csi_udp_init has run)
+    while (udp_csi_fd < 0) vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(5000));  // let WiFi fully settle
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        printf("csi_traffic: socket() failed\n");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Target the default gateway. We resolve it from the netif at runtime so
+    // it works across different home networks without hardcoding.
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ipinfo;
+    if (!netif || esp_netif_get_ip_info(netif, &ipinfo) != ESP_OK) {
+        printf("csi_traffic: couldn't get gateway IP\n");
+        close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+    struct sockaddr_in target = {0};
+    target.sin_family = AF_INET;
+    target.sin_port = htons(50050);   // arbitrary closed port — we just want the ACK
+    target.sin_addr.s_addr = ipinfo.gw.addr;
+
+    char payload[] = "csi-keepalive";
+    while (1) {
+        sendto(sock, payload, sizeof(payload) - 1, 0,
+               (struct sockaddr *) &target, sizeof(target));
+        vTaskDelay(pdMS_TO_TICKS(100));  // 10 Hz
+    }
+}
+
+static void start_csi_traffic() {
+    xTaskCreate(csi_traffic_task, "csi_traffic", 3072, NULL, 1, NULL);
 }
 
 char *project_type;
@@ -328,6 +389,7 @@ void csi_init(char *type) {
     start_cpu_temp_reporter();
     start_ble_scanner();
     start_wifi_scanner();
+    start_csi_traffic();   // ensures CSI has constant inbound frames to chew on
 #endif
 }
 
