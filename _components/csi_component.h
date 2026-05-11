@@ -116,14 +116,41 @@ static void start_cpu_temp_reporter() {}
 // The scan briefly takes the radio off our STA channel (~1-2 sec gap in
 // CSI capture), so we run it infrequently (every 60 sec) and use passive
 // scan (no probe requests = quieter on the air).
+//
+// Hardened in v2 after observing that the task would silently stop firing
+// on some boards after running for hours. Improvements:
+//   - Wait for WiFi connected before first scan (scans pre-connection fail)
+//   - Stop any prior scan state before starting new one (clears stuck state)
+//   - Track consecutive errors; on multiple failures, fully reset the scanner
+//   - Emit a "WIFI_HB" heartbeat each cycle so we can see when the task is
+//     running even if no APs are found
+//   - Shorter retry delay on errors so we recover faster from transient state
 static void wifi_scan_task(void *arg) {
+    // Wait for STA to be associated (esp_wifi_scan_start needs WiFi up)
+    int wait_count = 0;
+    while (wait_count < 30) {
+        wifi_ap_record_t info;
+        if (esp_wifi_sta_get_ap_info(&info) == ESP_OK) break;
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        wait_count++;
+    }
+
     // Stagger initial scan per-board so multiple boards don't all scan
     // at the same instant. Use last MAC byte to spread across ~50 sec.
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
-    vTaskDelay(pdMS_TO_TICKS(15000 + (mac[5] % 50) * 1000));
+    vTaskDelay(pdMS_TO_TICKS(5000 + (mac[5] % 50) * 1000));
+
+    int consecutive_errors = 0;
 
     while (1) {
+        // Heartbeat: tell the receiver this task is alive before each scan.
+        // Format: "WIFI_HB <consec_err>"
+        udp_send_typed("WIFI_HB", "%d", consecutive_errors);
+
+        // Defensive: cancel any prior scan that didn't finish (clears stuck state)
+        esp_wifi_scan_stop();
+
         wifi_scan_config_t scan_cfg = {};
         scan_cfg.ssid = NULL;
         scan_cfg.bssid = NULL;
@@ -134,6 +161,7 @@ static void wifi_scan_task(void *arg) {
 
         esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);  // blocking
         if (err == ESP_OK) {
+            consecutive_errors = 0;
             uint16_t ap_count = 0;
             esp_wifi_scan_get_ap_num(&ap_count);
             if (ap_count > 0) {
@@ -169,7 +197,21 @@ static void wifi_scan_task(void *arg) {
                 }
             }
         } else {
-            printf("wifi_scan: scan_start failed: %d\n", err);
+            consecutive_errors++;
+            printf("wifi_scan: scan_start failed: 0x%x (consec=%d)\n", err, consecutive_errors);
+            udp_send_typed("WIFI_ERR", "0x%x %d", err, consecutive_errors);
+
+            // After many consecutive failures, the WiFi state may be stuck.
+            // Try a longer recovery delay; the next iteration will call
+            // esp_wifi_scan_stop() which may clear the bad state.
+            if (consecutive_errors >= 3) {
+                vTaskDelay(pdMS_TO_TICKS(30000));  // 30s recovery
+                consecutive_errors = 0;            // reset and try again
+                continue;
+            }
+            // Quick retry on first errors (10 sec instead of 60)
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            continue;
         }
         vTaskDelay(pdMS_TO_TICKS(60000));  // next scan in 60s
     }
