@@ -1,4 +1,21 @@
-# ESP32 CSI Tool
+# ESP32 CSI Tool — Room Sense fork
+
+> **This is a fork.** The original upstream project is by Steven M. Hernandez:
+> https://github.com/StevenMHernandez/ESP32-CSI-Tool — [project website](https://stevenmhernandez.github.io/ESP32-CSI-Tool/).
+> All credit for the core CSI extraction work belongs to him. This fork keeps the original MIT license.
+>
+> **What this fork adds** (see [FORK_CHANGES.md](./FORK_CHANGES.md) for details):
+> - Wireless UDP streaming of CSI data (original is USB-tethered)
+> - BLE scanner task (NimBLE) for phone localization
+> - WiFi neighbor scanner task with watchdog + heartbeats
+> - CPU temperature publishing
+> - `csi_traffic_task` — generates self-traffic to keep CSI events flowing in low-traffic environments
+> - Multi-board MAC-prefixed dispatch protocol
+>
+> These additions turn the original CSI extraction tool into a home-presence sensor mesh.
+> The Room Sense backend that consumes this data lives at https://github.com/parthipanchandrasekeran/room-sense.
+
+---
 
 [ESP32 CSI Tool Website](https://stevenmhernandez.github.io/ESP32-CSI-Tool/)
 
